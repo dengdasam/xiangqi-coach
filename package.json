@@ -9,6 +9,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "test:perft": "node scripts/perft-test.mjs",
+    "test:kernel": "node scripts/kernel-test.mjs",
     "cap:sync": "cap sync",
     "cap:add:android": "cap add android",
     "cap:open:android": "cap open android"

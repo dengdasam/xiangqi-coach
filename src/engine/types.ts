@@ -4,7 +4,7 @@
  * Web 与 Native 两端共用同一套类型，桥接层负责序列化差异。
  */
 
-export type EngineBackend = 'native' | 'wasm' | 'mock'
+export type EngineBackend = 'native' | 'wasm' | 'local' | 'mock'
 
 export interface EngineConfig {
   /** 引擎可执行文件/资源路径 */

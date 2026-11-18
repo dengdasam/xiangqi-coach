@@ -9,6 +9,10 @@ const props = defineProps<{
   targets: number[]
   lastMove: { from: number; to: number } | null
   checkSquare: number | null
+  /** 刚落子的格子（触发出现动画） */
+  justMoved?: number | null
+  /** 刚被吃的棋子（播放消失动画，渲染在 from 位置） */
+  capturedAt?: { pos: number; piece: string } | null
 }>()
 const emit = defineEmits<{ (e: 'tap', index: number): void }>()
 
@@ -48,7 +52,7 @@ const cells = computed(() => {
 
 <template>
   <svg class="board-svg" :viewBox="`0 0 ${W} ${H}`" xmlns="http://www.w3.org/2000/svg">
-    <rect :x="0" :y="0" :width="W" :height="H" fill="#e8c896" />
+    <rect :x="0" :y="0" :width="W" :height="H" fill="var(--board-bg)" />
     <!-- 外框 -->
     <rect class="board-frame" :x="PAD - 6" :y="PAD - 6" :width="GAP * 8 + 12" :height="GAP * 9 + 12" />
     <!-- 横线 -->
@@ -69,18 +73,28 @@ const cells = computed(() => {
     <text :x="px(2)" :y="py(4) + 7" font-size="15" fill="#8a7150" text-anchor="middle">楚 河</text>
     <text :x="px(6)" :y="py(4) + 7" font-size="15" fill="#8a7150" text-anchor="middle">漢 界</text>
 
+
     <!-- 上一步走法标记 -->
     <rect v-if="lastMove" class="last-move-mark" :x="px(lastMove.from % 9) - 17" :y="py(Math.floor(lastMove.from / 9)) - 17" :width="34" :height="34" rx="3" />
     <rect v-if="lastMove" class="last-move-mark" :x="px(lastMove.to % 9) - 17" :y="py(Math.floor(lastMove.to / 9)) - 17" :width="34" :height="34" rx="3" />
 
-    <!-- 可走点提示 -->
-    <circle v-for="t in targets" :key="`t${t}`" class="dot-hint" :cx="px(t % 9)" :cy="py(Math.floor(t / 9))" r="6" />
+    <!-- 可走点提示（本身即点击热区，解决空格目标无法点击的问题） -->
+    <g v-for="t in targets" :key="`t${t}`" @click.stop="emit('tap', t)" class="piece-tap">
+      <circle class="dot-hint" :cx="px(t % 9)" :cy="py(Math.floor(t / 9))" r="6" />
+      <circle :cx="px(t % 9)" :cy="py(Math.floor(t / 9))" r="19" fill="transparent" />
+    </g>
 
     <!-- 将军标记 -->
     <circle v-if="checkSquare !== null" class="check-mark" :cx="px(checkSquare % 9)" :cy="py(Math.floor(checkSquare / 9))" r="19" />
 
+    <!-- 被吃棋子：在原位播放消失动画 -->
+    <g v-if="capturedAt" :class="'piece-capture'" :style="{ transformOrigin: `${px(capturedAt.pos % 9)}px ${py(Math.floor(capturedAt.pos / 9))}px` }">
+      <circle :class="['piece-circle', isRed(capturedAt.piece) ? 'piece-red' : 'piece-black']" :cx="px(capturedAt.pos % 9)" :cy="py(Math.floor(capturedAt.pos / 9))" r="17" />
+      <text :class="isRed(capturedAt.piece) ? 'piece-text-red' : 'piece-text-black'" :x="px(capturedAt.pos % 9)" :y="py(Math.floor(capturedAt.pos / 9)) + 6" font-size="19" font-weight="700" text-anchor="middle">{{ pieceGlyph[capturedAt.piece] }}</text>
+    </g>
+
     <!-- 棋子（点击热区半径 19） -->
-    <g v-for="cell in cells" :key="cell.i" @click="emit('tap', cell.i)" style="cursor:pointer">
+    <g v-for="cell in cells" :key="cell.i" @click="emit('tap', cell.i)" class="piece-tap" :class="justMoved === cell.i ? 'piece-enter' : ''">
       <circle
         :class="['piece-circle', isRed(cell.p) ? 'piece-red' : 'piece-black', selected === cell.i ? 'piece-selected' : '']"
         :cx="cell.x" :cy="cell.y" r="17"

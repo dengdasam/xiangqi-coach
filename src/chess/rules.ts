@@ -226,6 +226,11 @@ export function inCheck(board: Board, red: boolean): boolean {
   return isAttacked(board, king, !red)
 }
 
+/** 将/帅格位（供评估与 UI 使用） */
+export function kingSquare(board: Board, red: boolean): number {
+  return findKing(board, red)
+}
+
 /** 生成全部合法着法（过滤送将、将帅照面） */
 export function generateLegalMoves(board: Board, redToMove: boolean): Array<{ from: number; to: number }> {
   const moves: Array<{ from: number; to: number }> = []

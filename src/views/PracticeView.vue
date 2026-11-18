@@ -2,41 +2,44 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import ChessBoard from '../components/ChessBoard.vue'
 import EvalBar from '../components/EvalBar.vue'
+import EvalCurve from '../components/EvalCurve.vue'
 import { engine } from '../engine/EngineBridge'
 import type { InfoFrame, SearchResult } from '../engine/types'
-import {
-  INITIAL_FEN, parseFen, toFen, applyMove, legalTargets, generateLegalMoves,
-  inCheck, type Board
-} from '../chess/rules'
+import { INITIAL_FEN, parseFen } from '../chess/rules'
+import { useGame, uciToIndices } from '../composables/useGame'
+import { useCoach } from '../composables/useCoach'
+import { useTheme } from '../composables/useTheme'
+import { LEVELS, pickMove } from '../training/difficulty'
+import { newId } from '../data/model'
+import { store } from '../data/db'
+import { DIMENSION_LABELS } from '../training/profile'
 
-// ---- 对局状态 ----
-const board = ref<Board>(parseFen(INITIAL_FEN).board)
-const redToMove = ref(true)
-const selected = ref<number | null>(null)
-const targets = ref<number[]>([])
-const lastMove = ref<{ from: number; to: number } | null>(null)
-const movesUci = ref<string[]>([])
-const history = ref<Array<{ fen: string; uci: string }>>([])
+// ---- 组合式逻辑（已从巨型组件拆出）----
+const gameId = ref(newId())
+const game = useGame(gameId.value)
+const coach = useCoach(gameId.value)
+const { theme, toggle: toggleTheme } = useTheme()
 
-// ---- 引擎状态 ----
+// ---- UI 状态 ----
 const scoreCp = ref(0)
 const depth = ref(0)
 const thinking = ref(false)
-const pv = ref<string[]>([])
 const ready = ref(false)
 const toast = ref('')
+const levelId = ref('club')
+const showProfile = ref(false)
+const evalHistory = ref<number[]>([0])
+const justMoved = ref<number | null>(null)
+const capturedAt = ref<{ pos: number; piece: string } | null>(null)
+const turnStarted = ref(Date.now())
 
-// ---- 教练解说（demo 用 L1 模板，接入 LLM 后替换） ----
-const grade = ref('—')
-const coachText = ref('轮到你走棋。选一个棋子，教练会实时评估你这步的好坏。')
-const coachAlt = ref('')
-
-function squareName(i: number) {
-  const col = 'abcdefghi'[i % 9]
-  const row = 9 - Math.floor(i / 9)
-  return `${col}${row}`
-}
-function uciOf(from: number, to: number) { return squareName(from) + squareName(to) }
+const level = computed(() => LEVELS.find((l) => l.id === levelId.value) ?? LEVELS[2])
+const gradeClass = computed(() => {
+  const g = coach.commentary.value?.grade ?? ''
+  if (g === '严重失误' || g === '失误') return 'blunder'
+  if (g === '优秀' || g === '良好') return 'good'
+  return ''
+})
 
 function showToast(msg: string) {
   toast.value = msg
@@ -44,50 +47,99 @@ function showToast(msg: string) {
 }
 
 async function tapSquare(i: number) {
-  if (thinking.value) return
-  const p = board.value[i]
-  if (selected.value === null) {
-    // 只能选自己（红方）的子
-    if (p === '.' || p !== p.toUpperCase() || !/[A-Z]/.test(p)) return
-    selected.value = i
-    targets.value = legalTargets(board.value, i)
+  if (thinking.value || !ready.value) return
+  if (game.selected.value === null) {
+    game.select(i)
     return
   }
-  if (targets.value.includes(i)) {
-    const from = selected.value
-    await doPlayerMove(from, i)
-    selected.value = null
-    targets.value = []
-  } else if (p !== '.' && p === p.toUpperCase() && /[A-Z]/.test(p)) {
-    selected.value = i
-    targets.value = legalTargets(board.value, i)
-  } else {
-    selected.value = null
-    targets.value = []
+  if (game.targets.value.includes(i)) {
+    await doPlayerMove(game.selected.value, i)
+  } else if (!game.select(i)) {
+    game.selected.value = null
+    game.targets.value = []
   }
 }
 
 async function doPlayerMove(from: number, to: number) {
-  const fenBefore = toFen(board.value, redToMove.value)
-  const uci = uciOf(from, to)
-  board.value = applyMove(board.value, from, to)
-  lastMove.value = { from, to }
-  movesUci.value.push(uci)
-  history.value.push({ fen: fenBefore, uci })
-  redToMove.value = false
+  const capturedPiece = game.board.value[to] !== '.' ? game.board.value[to] : null
+  const thinkSeconds = Math.max(0.2, (Date.now() - turnStarted.value) / 1000)
+  const node = game.playMove(from, to, thinkSeconds)
+  if (!node) return
 
-  // 走完立即给这步评分（此处用引擎评估局面作为演示；完整版应为 before/after cp loss）
-  const isCapture = fenBefore !== '' && to !== from
-  showToast(`你走了 ${uci}${isCapture ? '（吃子）' : ''}`)
-  await askEngine()
+  // 动画状态
+  justMoved.value = to
+  if (capturedPiece) capturedAt.value = { pos: to, piece: capturedPiece }
+  window.setTimeout(() => { justMoved.value = null; capturedAt.value = null }, 280)
+
+  showToast(`你走了 ${node.uci}${capturedPiece ? '（吃子）' : ''}`)
+  await coach.onPlayerMove(node, game.board.value, node.side === 'r', thinkSeconds)
+  await store.saveGame({
+    id: gameId.value, levelId: levelId.value, playerSide: 'r', result: 'ongoing',
+    startFen: INITIAL_FEN, currentNodeId: game.currentNodeId.value,
+    createdAt: Date.now(), updatedAt: Date.now()
+  })
+
+  // 引擎对手走子（用 MultiPV 采样调节难度）
+  await engineMove()
+  turnStarted.value = Date.now()
 }
 
-async function askEngine() {
+async function engineMove() {
   thinking.value = true
-  coachText.value = '引擎正在分析局面…'
-  const fen = toFen(board.value, redToMove.value)
-  await engine.setPosition(fen, movesUci.value)
-  await engine.go({ depth: 12, movetime: 1000, multipv: 3 })
+  // fen 已是走后当前局面；再传历史会让引擎重复重放，必须传空
+  await engine.setPosition(game.fen.value, [])
+  const cands = await engine.multiPv(level.value.depth, level.value.multipv)
+  const chosen = pickMove(cands, level.value)
+  thinking.value = false
+  if (!chosen) { showToast('引擎未返回着法'); return }
+
+  const { from, to } = uciToIndices(chosen)
+  const capturedPiece = game.board.value[to] !== '.' ? game.board.value[to] : null
+  // 引擎走子也进树，保持分支结构一致
+  game.playMove(from, to, 0)
+  justMoved.value = to
+  if (capturedPiece) capturedAt.value = { pos: to, piece: capturedPiece }
+  window.setTimeout(() => { justMoved.value = null; capturedAt.value = null }, 280)
+
+  const best = cands[0]
+  if (best) { scoreCp.value = game.redToMove.value ? -best.scoreCp : best.scoreCp; depth.value = best.depth }
+  evalHistory.value.push(scoreCp.value)
+  if (evalHistory.value.length > 40) evalHistory.value.shift()
+}
+
+function jumpTo(uci: string, index: number) {
+  if (thinking.value) return
+  // 按 uci 序列定位节点
+  const target = game.nodes.value[index]
+  if (target) {
+    game.jumpTo(target.id)
+    evalHistory.value = evalHistory.value.slice(0, index + 1)
+    showToast(`回到第 ${index + 1} 手`)
+  }
+}
+
+function undo() {
+  if (thinking.value) return
+  // 悔棋：退两手（引擎+玩家）
+  game.undo(); game.undo()
+  coach.reset()
+  evalHistory.value = [0]
+  showToast('已悔棋')
+}
+
+function restart() {
+  game.reset(); coach.reset()
+  scoreCp.value = 0; depth.value = 0
+  evalHistory.value = [0]
+  justMoved.value = null; capturedAt.value = null
+  gameId.value = newId()
+  turnStarted.value = Date.now()
+  showToast('新的一局')
+}
+
+function analyzeProfile() {
+  coach.refreshProfile(game.nodes.value)
+  showProfile.value = true
 }
 
 let offInfo: (() => void) | undefined
@@ -96,82 +148,15 @@ let offBest: (() => void) | undefined
 onMounted(async () => {
   offInfo = engine.on('info', (f: InfoFrame) => {
     depth.value = f.depth ?? depth.value
-    if (f.scoreCp !== undefined) scoreCp.value = redToMove.value ? f.scoreCp : -f.scoreCp
-    if (f.pv?.length) pv.value = f.pv
+    if (f.scoreCp !== undefined) scoreCp.value = game.redToMove.value ? f.scoreCp : -f.scoreCp
   })
   offBest = engine.on('bestmove', (r: SearchResult) => {
-    thinking.value = false
-    if (r.info?.scoreCp !== undefined) scoreCp.value = redToMove.value ? r.info.scoreCp : -r.info.scoreCp
-    // 演示解说：L1 模板，取 PV 首着
-    const best = r.bestmove
-    const bestText = best ? `引擎推荐 ${best}` : ''
-    grade.value = '良好'
-    coachText.value = `${bestText}。你这步之后局面评估 ${(scoreCp.value / 100).toFixed(2)}。`
-    coachAlt.value = r.infos && r.infos.length > 1
-      ? `其他候选：${r.infos.slice(0, 3).map((i) => i.pv?.[0] ?? '').filter(Boolean).join(' / ')}`
-      : ''
-    // 演示：引擎自动走一步（对练闭环）
-    if (best && best.length === 4) {
-      window.setTimeout(() => applyEngineMove(best), 400)
-    }
+    if (r.info?.scoreCp !== undefined) scoreCp.value = game.redToMove.value ? r.info.scoreCp : -r.info.scoreCp
   })
-  await engine.init({ hash: 256, threads: 2 })
+  await engine.init()
   ready.value = await engine.isReady()
-  showToast(ready.value ? '引擎就绪，红方先走' : '引擎未就绪')
+  showToast(`引擎就绪（${engine.backend === 'local' ? '内置搜索' : '原生'}）`)
 })
-
-function applyEngineMove(uci: string) {
-  const from = (9 - Number(uci[1])) * 9 + 'abcdefghi'.indexOf(uci[0])
-  const to = (9 - Number(uci[3])) * 9 + 'abcdefghi'.indexOf(uci[2])
-  const legal = generateLegalMoves(board.value, redToMove.value)
-  const match = legal.find((m) => m.from === from && m.to === to)
-  if (!match) { showToast('引擎着法与规则库不一致（perft 校验提示）'); return }
-  board.value = applyMove(board.value, match.from, match.to)
-  lastMove.value = { from: match.from, to: match.to }
-  movesUci.value.push(uci)
-  redToMove.value = true
-  scoreCp.value = -scoreCp.value
-}
-
-const checkSquare = computed(() => {
-  if (inCheck(board.value, redToMove.value)) {
-    const kingIdx = board.value.indexOf(redToMove.value ? 'K' : 'k')
-    return kingIdx >= 0 ? kingIdx : null
-  }
-  return null
-})
-
-function undo() {
-  if (history.value.length < 2 || thinking.value) return
-  // 悔一步：回退到玩家上一手之前（引擎那手也退回）
-  history.value.pop(); history.value.pop()
-  movesUci.value.pop(); movesUci.value.pop()
-  const last = history.value[history.value.length - 1]
-  const fen = last ? last.fen : INITIAL_FEN
-  const parsed = parseFen(fen)
-  board.value = parsed.board
-  redToMove.value = true
-  lastMove.value = null
-  selected.value = null
-  targets.value = []
-  grade.value = '—'
-  coachText.value = '已悔棋，回到你的上一步。'
-  coachAlt.value = ''
-}
-
-function restart() {
-  board.value = parseFen(INITIAL_FEN).board
-  redToMove.value = true
-  movesUci.value = []
-  history.value = []
-  lastMove.value = null
-  selected.value = null
-  targets.value = []
-  scoreCp.value = 0
-  grade.value = '—'
-  coachText.value = '新的一局，红方先走。'
-  coachAlt.value = ''
-}
 
 onUnmounted(() => {
   offInfo?.(); offBest?.()
@@ -183,41 +168,67 @@ onUnmounted(() => {
   <div style="display:flex;flex-direction:column;height:100%">
     <div class="topbar">
       <h1>象棋教练</h1>
-      <span class="badge">{{ ready ? '引擎就绪' : '连接中' }} · 红方</span>
+      <div class="row">
+        <select v-model="levelId" class="icon-btn" :disabled="thinking" style="font-size:11px">
+          <option v-for="l in LEVELS" :key="l.id" :value="l.id">{{ l.name }}</option>
+        </select>
+        <button class="icon-btn" @click="toggleTheme" :title="theme === 'dark' ? '切换浅色' : '切换深色'">{{ theme === 'dark' ? '☀' : '☾' }}</button>
+        <span class="badge">{{ ready ? '就绪' : '连接中' }}</span>
+      </div>
     </div>
 
     <div class="board-area">
       <ChessBoard
-        :board="board" :selected="selected" :targets="targets"
-        :last-move="lastMove" :check-square="checkSquare"
+        :board="game.board.value" :selected="game.selected.value" :targets="game.targets.value"
+        :last-move="game.lastMove.value" :check-square="game.checkSquare.value"
+        :just-moved="justMoved" :captured-at="capturedAt"
         @tap="tapSquare"
       />
     </div>
 
     <div class="panel">
       <EvalBar :score-cp="scoreCp" :depth="depth" :thinking="thinking" />
+      <EvalCurve :scores="evalHistory" />
 
       <div class="movelist">
-        <div class="movelist-head">着法记录（{{ movesUci.length }}）</div>
+        <div class="movelist-head">
+          <span>着法（{{ game.uciHistory.value.length }}）</span>
+          <span v-if="coach.summary.value.accuracy">{{ coach.summary.value.accuracy }}% 准确率</span>
+        </div>
         <div class="movelist-scroll">
-          <span v-for="(m, i) in movesUci" :key="i" class="move-chip" :class="{ active: i === movesUci.length - 1 }">{{ m }}</span>
-          <span v-if="!movesUci.length" class="move-chip" style="color:var(--text-dim)">尚无着法</span>
+          <span v-for="(m, i) in game.uciHistory.value" :key="i"
+            :class="['move-chip', i === game.uciHistory.value.length - 1 ? 'active' : '', game.nodes.value[i]?.grade?.label === '严重失误' ? 'blunder' : '']"
+            @click="jumpTo(m, i)">{{ m }}</span>
+          <span v-if="!game.uciHistory.value.length" class="move-chip" style="color:var(--text-dim)">尚无着法</span>
         </div>
       </div>
 
-      <div class="coach-panel">
+      <div class="coach-panel" v-if="coach.commentary.value">
         <div class="coach-head">
           <span>教练点评</span>
-          <span class="coach-grade">{{ grade }}</span>
+          <span class="coach-grade" :class="gradeClass">{{ coach.commentary.value.grade }}</span>
         </div>
-        <div class="coach-text">{{ coachText }}</div>
-        <div class="coach-alt" v-if="coachAlt">{{ coachAlt }}</div>
+        <div class="coach-text">
+          {{ coach.commentary.value.headline }}
+          <span class="consequence">{{ coach.commentary.value.consequence }}</span>
+        </div>
+        <div class="coach-alt">{{ coach.commentary.value.alternative }}</div>
+        <div class="coach-tip">{{ coach.commentary.value.tip }}</div>
       </div>
+
+      <div class="profile-grid" v-if="showProfile && coach.profile.value">
+        <div v-for="(label, key) in DIMENSION_LABELS" :key="key"
+          :class="['profile-cell', coach.profile.value.weakest === key ? 'weak' : '']">
+          {{ label }} {{ (coach.profile.value as any)[key] }}
+          <div class="profile-bar"><div :style="{ width: (coach.profile.value as any)[key] + '%' }" /></div>
+        </div>
+      </div>
+      <div v-if="showProfile && coach.suggestion.value" class="coach-tip" style="padding:0 14px 8px">{{ coach.suggestion.value }}</div>
 
       <div class="controls">
         <button class="ctrl-btn" @click="undo" :disabled="thinking">悔棋</button>
         <button class="ctrl-btn" @click="restart" :disabled="thinking">新局</button>
-        <button class="ctrl-btn primary" @click="askEngine" :disabled="thinking">分析局面</button>
+        <button class="ctrl-btn" @click="analyzeProfile" :disabled="thinking">能力画像</button>
       </div>
     </div>
 

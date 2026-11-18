@@ -1,0 +1,7 @@
+[
+  {
+    "pkg": "NativeEngine",
+    "path": "../node_modules/@capacitor/cli/dist/declarations/src/index.js",
+    "androidPath": "app/src/main/java/com/xiangqicoach/app/NativeEnginePlugin.java"
+  }
+]

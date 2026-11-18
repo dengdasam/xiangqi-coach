@@ -1,0 +1,32 @@
+{
+  "name": "xiangqi-coach",
+  "version": "0.1.0",
+  "private": true,
+  "description": "象棋教练 - 带实时评分与解说的人机对练应用（应用框架骨架）",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test:perft": "node scripts/perft-test.mjs",
+    "cap:sync": "cap sync",
+    "cap:add:android": "cap add android",
+    "cap:open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "vant": "^4.9.21",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5",
+    "vue-tsc": "^2.2.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

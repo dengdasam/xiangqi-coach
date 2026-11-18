@@ -1,0 +1,120 @@
+:root {
+  /* 深色对弈主题（参考皮卡鱼 App 的深色界面） */
+  --bg: #111418;
+  --panel: #1c2127;
+  --panel-2: #242a31;
+  --line: #333b44;
+  --text: #e6e9ed;
+  --text-dim: #9aa4ae;
+  --accent: #d9822b;
+  --red: #d94436;
+  --black: #2f6fb0;
+  --win: #4caf7d;
+  --loss: #d94436;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body, #app { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  overflow: hidden;
+}
+button { font-family: inherit; }
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.topbar h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: 1px; }
+.topbar .badge {
+  font-size: 11px; color: var(--text-dim);
+  border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px;
+}
+
+.board-area {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  min-height: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+/* 棋盘 SVG */
+.board-svg { width: 100%; max-width: 460px; height: auto; touch-action: manipulation; }
+.board-line { stroke: #8a7150; stroke-width: 1; }
+.board-frame { stroke: #8a7150; stroke-width: 2; fill: none; }
+.palace-line { stroke: #8a7150; stroke-width: 1; }
+.piece-circle { stroke-width: 1.5; }
+.piece-red { fill: #f3e3c8; stroke: var(--red); }
+.piece-black { fill: #f3e3c8; stroke: var(--black); }
+.piece-text-red { fill: var(--red); }
+.piece-text-black { fill: var(--black); }
+.piece-selected { filter: drop-shadow(0 0 6px var(--accent)); }
+.dot-hint { fill: rgba(217,130,43,0.65); }
+.last-move-mark { fill: none; stroke: var(--accent); stroke-width: 2; }
+.check-mark { fill: none; stroke: var(--loss); stroke-width: 3; }
+
+/* 评估条 */
+.evalbar-wrap { padding: 8px 14px 4px; }
+.evalbar-head { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+.evalbar-track { height: 8px; background: var(--black); border-radius: 4px; overflow: hidden; position: relative; }
+.evalbar-fill { height: 100%; background: var(--red); transition: width .25s ease; }
+
+/* 着法列表 */
+.movelist { padding: 4px 14px 8px; }
+.movelist-head { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+.movelist-scroll { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.move-chip {
+  flex: 0 0 auto; font-size: 12px; padding: 4px 8px; border-radius: 4px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+}
+.move-chip.best { border-color: var(--win); }
+.move-chip.blunder { border-color: var(--loss); color: #ff9a90; }
+.move-chip.active { background: var(--accent); color: #1a1a1a; }
+
+/* 教练解说面板 */
+.coach-panel { padding: 8px 14px 12px; }
+.coach-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--accent); margin-bottom: 6px; }
+.coach-grade { font-weight: 700; padding: 1px 6px; border-radius: 3px; background: var(--panel-2); }
+.coach-text { font-size: 13px; line-height: 1.6; color: var(--text); min-height: 38px; }
+.coach-alt { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+/* 控制条 */
+.controls { display: flex; gap: 8px; padding: 8px 14px 12px; }
+.ctrl-btn {
+  flex: 1; padding: 9px 0; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text); font-size: 13px;
+}
+.ctrl-btn.primary { background: var(--accent); color: #1a1a1a; border-color: var(--accent); font-weight: 600; }
+.ctrl-btn:disabled { opacity: .4; }
+
+/* 提示条 */
+.toast {
+  position: fixed; left: 50%; top: 60px; transform: translateX(-50%);
+  background: rgba(0,0,0,.8); color: #fff; padding: 8px 14px; border-radius: 6px;
+  font-size: 12px; z-index: 99; max-width: 80%; text-align: center;
+}
